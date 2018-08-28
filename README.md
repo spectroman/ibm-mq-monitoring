@@ -53,8 +53,8 @@ The return will be a JSON for LLD:
   - `mq_daytime_triggers:` is an array of queue names that will be descriminated during the creation of the new template and static items will be put into place. And the triggers for these queues have the addition to only generate alarms between 0800 and 2200 hours;
   - The items on these lists must be the same list of queues described in the regular expression that must follow the zabbix installation using this methods.
     - For it all work and the template be successfully used on zabbix, a regular expression must be created that contains the following, for exemple:
-      - 1    »    Q.SOME.FF.MUTEX    [Character string not included]
-      - 2    »    NT.FF.CONNECTORMUTEXQ    [Character string not included]
+      - 1    »    QL.SOME.FF.MUTEX    [Character string not included]
+      - 2    »    NET.FF.CONNECTORMUTEXQ    [Character string not included]
 - The name of such regular expression must match with the variable: `mq_zabbix_regex_name`
 
 # The Conclusion
@@ -65,7 +65,8 @@ This will provide the initial necessary overview for an IBM MQ, but then:
   - display-wrapper QUEUEMANAGER QUEUE|CHANNEL DISPLAY_TYPE PROPERTY|ALL
   - a better evaluation can be see as follow:
 
-```[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE ALL
+```
+[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE ALL
 5724-H72 (C) Copyright IBM Corp. 1994, 2011.  ALL RIGHTS RESERVED.
 Starting MQSC for queue manager QMAPPT15.
      1 : DISPLAY QUEUE(TI.LOG)
@@ -101,11 +102,11 @@ AMQ8409: Display Queue details.
 One MQSC command read.
 No commands have a syntax error.
 All valid MQSC commands were processed.
-[root@atb-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE CURDEPTH
+[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE CURDEPTH
 0
-[root@atb-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE TYPE
+[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE TYPE
 QLOCAL
-[root@atb-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QSTATUS ALL
+[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QSTATUS ALL
 5724-H72 (C) Copyright IBM Corp. 1994, 2011.  ALL RIGHTS RESERVED.
 Starting MQSC for queue manager QMAPPT15.
      1 : DISPLAY QSTATUS(TI.LOG)
@@ -120,7 +121,7 @@ AMQ8450: Display queue status details.
 One MQSC command read.
 No commands have a syntax error.
 All valid MQSC commands were processed.
-[root@atb-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QSTATUS MONQ
+[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QSTATUS MONQ
 OFF
-[root@atb-app-t15 mq_framework]#
+[root@mq-app-t15 mq_framework]#
 ```
