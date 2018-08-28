@@ -65,8 +65,7 @@ This will provide the initial necessary overview for an IBM MQ, but then:
   - display-wrapper QUEUEMANAGER QUEUE|CHANNEL DISPLAY_TYPE PROPERTY|ALL
   - a better evaluation can be see as follow:
 
-  `
-[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE ALL
+```[root@mq-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QUEUE ALL
 5724-H72 (C) Copyright IBM Corp. 1994, 2011.  ALL RIGHTS RESERVED.
 Starting MQSC for queue manager QMAPPT15.
      1 : DISPLAY QUEUE(TI.LOG)
@@ -124,4 +123,4 @@ All valid MQSC commands were processed.
 [root@atb-app-t15 mq_framework]# ./display-wrapper QMAPPT15 TI.LOG QSTATUS MONQ
 OFF
 [root@atb-app-t15 mq_framework]#
-  `
+```
