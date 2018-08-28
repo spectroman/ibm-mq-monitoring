@@ -1,0 +1,70 @@
+#!/bin/bash
+###############################################################################
+#                                   _ _
+# Lets discover all the channels and its types from the IBM MQ!
+#
+#
+# by spectroman at yahoo.com ## 09-05-2017
+#
+#
+
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 QUEUEMANAGERNAME"
+    exit 1
+fi
+
+LOCAL=$(dirname $0)
+CFG=$LOCAL/mq-config
+
+. $CFG
+
+declare -a QUEUES
+
+CQUERY=`echo "DISPLAY CHANNEL(*)" | $SUDOUSER $RUNMQSC_BIN $1 `
+
+RES=$?
+if [[  "$RES" -gt 0 ]]; then
+  echo "There was a problem executing the Queue Manager discovery, please check it manually"
+  exit 1;
+fi
+
+IFS=$'\n'
+CNT=0
+
+for line in ${CQUERY[@]}; do
+  if [[ $line =~ CHANNEL\((.*)\)[[:space:]]*CHLTYPE\((.*)\) ]]; then
+    CNT=$(($CNT+1))
+    CHANNELS[$CNT]=${BASH_REMATCH[1]}"|"${BASH_REMATCH[2]}
+  fi
+done
+
+IFS=''
+
+NUMIT=${#CHANNELS[@]}
+PRN=0
+
+for arritem in ${CHANNELS[@]}; do
+  IFS='|'
+  declare -a subitm
+  subitm=($arritem)
+  nameq=${subitm[0]}
+  typeq=${subitm[1]}
+
+  if [[ "$NUMIT" == 1 ]] && [[ "$PRN" == 0 ]]; then
+    echo "{" $arritem" }"
+  else
+    if [[ "$PRN" == 0 ]]; then
+      echo "{ \"data\": ["
+    fi
+    if [[ $(($PRN + 1)) == "$NUMIT" ]]; then
+      echo "{ \"{#CHANNEL}\" : \" $nameq\","
+      echo "  \"{#CTYPE}\" : \" $typeq\" }"
+      echo "]}"
+    elif [[ "$PRN" -lt "$NUMIT" ]]; then
+      echo "{ \"{#CHANNEL}\" : \" $nameq\","
+      echo "  \"{#CTYPE}\" : \" $typeq\" },"
+    fi
+  fi
+  PRN=$PRN+1
+done

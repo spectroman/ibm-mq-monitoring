@@ -1,0 +1,22 @@
+---
+mq_priority: 5
+mq_username: "ansibot"
+mq_password: "omgitssecret!!"
+mq_api_uri: "https://monitor.ourzabbix.com/api_jsonrpc.php"
+mq_QMGMR_BIN: "/opt/IBM/mqm/bin/dspmq"
+mq_RUNMQSC_BIN: "/opt/IBM/mqm/bin/runmqsc"
+mq_SUDOUSER: "sudo -u mqm "
+mq_scripts: "/var/zabbix/scripts/mq_framework/"
+mq_ZBXAPI: "{{mq_scripts}}zabbix-api"
+mq_zabbix_regex_name: "@Queue inverse"
+mq_inverse_queues:
+  - "QL.SOME.FF.MUTEXQ"
+mq_daytime_triggers:
+  - "ERP.ERRORQ"
+  - "QL.ERRORQ"
+  - "ERP.ALERTQ"
+mq_daytime_trigger_inverse:
+  - "PLUS.BO.REPLY"
+  - "FILE.GEM_IN_MX.Q"
+  - "NET.FLATFILE_MX.Q"
+  - "NET.FF.CONNECTORMUTEXQ"

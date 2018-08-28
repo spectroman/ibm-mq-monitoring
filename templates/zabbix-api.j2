@@ -1,0 +1,595 @@
+#!/usr/bin/env python
+########################################################################################
+# ______      _     _     _         ___  ______ _____       _
+#|___  /     | |   | |   (_)       / _ \ | ___ \_   _|     | |
+#   / /  __ _| |__ | |__  ___  __ / /_\ \| |_/ / | |    ___| | __ ___   _____
+#  / /  / _` | '_ \| '_ \| \ \/ / |  _  ||  __/  | |   / __| |/ _` \ \ / / _ \
+#./ /__| (_| | |_) | |_) | |>  <  | | | || |    _| |_  \__ \ | (_| |\ V /  __/
+#\_____/\__,_|_.__/|_.__/|_/_/\_\ \_| |_/\_|    \___/  |___/_|\__,_| \_/ \___|
+#
+#
+#  This is a basic skeleton to use Zabbix API to do whatever you want :-p
+#
+#  In this instance, we are creating an Auto Discovery, items, triggers and graphs
+#  for the freaking MQ queues which have dynamic names and the names cannot be
+#  automatically used in a secondary discovery, then, when we find the Queue Manager Name
+#  this script will create the rest of the necessary discovery and prototypes.
+#
+# by spectroman at yahoo.com ## 09-05-2017
+#
+#
+
+import sys
+import urllib2
+import json
+
+hostname=sys.argv[1]
+qmgr=sys.argv[2]
+
+# 5 = disaster = production
+# 4 = high
+# 3 = average
+
+trigger_prio="{{mq_priority}}"
+script_location="{{mq_scripts}}"
+invert_triggers={{mq_inverse_queues}}
+daytime_triggers={{mq_daytime_triggers}}
+daytime_triggers_inverse={{mq_daytime_trigger_inverse}}
+regexp_name="{{mq_zabbix_regex_name}}"
+
+verbose="false"
+
+if (int(trigger_prio) < 5):
+    tmpl_name_type = " DTA"
+else:
+    tmpl_name_type = " PM"
+
+if not hostname:
+  sys.exit("First parameter required: hostname")
+
+if not qmgr:
+  sys.exit("Second parameter required: Queue Manager name")
+
+#
+# Lets Auth and Keep token
+#
+
+username="{{mq_username}}"
+password="{{mq_password}}"
+api_uri ="{{mq_api_uri}}"
+headers = {'content-type': 'application/json'}
+
+login= json.dumps({ 'jsonrpc': '2.0', 'method': 'user.login', 'params': { 'user': username, 'password': password }, 'id': 1 });
+calling = urllib2.Request(api_uri, login, headers)
+response = urllib2.urlopen(calling)
+result = json.loads(response.read())
+zbx_token=result['result']
+if verbose == "true":
+    print("Zabbix Token is: "+zbx_token)
+
+#
+# if there is a token, shall we find the host
+#
+
+if zbx_token:
+    host_APIquery = json.dumps({ 'jsonrpc': '2.0', 'method': 'host.get', 'params': { 'output': 'hostid', 'filter': { 'host': hostname } }, 'auth': zbx_token ,'id': 1 });
+    call_hid = urllib2.Request(api_uri, host_APIquery, headers)
+    response_hid = urllib2.urlopen(call_hid)
+    result_hid = json.loads(response_hid.read())
+    hostid=result_hid['result'][0]['hostid']
+    if verbose == "true":
+        print("Host ID to attach template to is: "+hostid)
+
+#
+# if there is a host, shall we find the template
+#
+
+    if hostid:
+        n_tmpl_name = "Template App IBM MQ QMGR "+qmgr+tmpl_name_type
+        tmpl_APIquery = json.dumps({ 'jsonrpc': '2.0', 'method': 'template.get', 'params': { 'output': 'extend', 'filter': { 'host': n_tmpl_name }}, 'auth': zbx_token ,'id': 1 });
+        call_cem = urllib2.Request(api_uri, tmpl_APIquery, headers)
+        response_cem = urllib2.urlopen(call_cem)
+        result_cem = json.loads(response_cem.read())
+
+        reuse_template=''
+        for index in result_cem['result']:
+            check_name  =index['name']
+            tmpltid     =index['templateid']
+            if check_name == n_tmpl_name:
+                if verbose == "true":
+                    print("Template already exists: "+ check_name+" with ID: "+tmpltid)
+                reuse_template = tmpltid
+            else:
+                if verbose == "true":
+                    print("Template already DOES NOT exist: "+ check_name)
+
+        if not reuse_template:
+            tmpl_APIcreate = json.dumps({ "jsonrpc": "2.0", "method": "template.create", "params":
+                                        { "host": n_tmpl_name, "groups": { "groupid": 1 },
+                                          "hosts": [ { "hostid": hostid } ] }, "auth": zbx_token, "id": 1 })
+            call_ntc = urllib2.Request(api_uri, tmpl_APIcreate, headers)
+            response_ntc = urllib2.urlopen(call_ntc)
+            result_ntc = json.loads(response_ntc.read())
+            templateid = result_ntc['result']['templateids'][0]
+            if verbose == "true":
+                print ("Creating new template with ID: "+templateid)
+        else:
+            templateid = reuse_template
+            if verbose == "true":
+                print ("Reusing old template with ID: "+templateid)
+
+# Ok Lets create stuff.
+#
+#  LLDs
+#
+
+# queue discovery
+
+        adisc_name  = "Queues Discovery for "+qmgr
+        adisc_APIcreate = json.dumps({ "jsonrpc": "2.0", "method": "discoveryrule.create", "params": { "name": adisc_name ,
+                                      "key_": "system.run["+script_location+"queue-discovery "+qmgr+"]",
+                                      "hostid": templateid, "type": "0", "delay": 3600, "interfaceid" : "100", "filter": { "evaltype": 1, "conditions": [
+                                      { "macro": {{'"{#QUEUE}"'}}, "value": regexp_name },
+                                      { "macro": {{'"{#QTYPE}"'}}, "value": "" } ]}}, "auth": zbx_token, "id": 1 } )
+        call_nah = urllib2.Request(api_uri, adisc_APIcreate, headers)
+        response_nah = urllib2.urlopen(call_nah)
+        result_nah = json.loads(response_nah.read())
+        if hasattr(result_nah, 'result'):
+            Qlldruleid = result_nah['result']['itemids'][0]
+            if verbose == "true":
+                print ("Using newly created discoveryrule ("+adisc_name+") id: "+Qlldruleid)
+        else:
+            Rdisc_APIcreate = json.dumps({ "jsonrpc": "2.0", "method": "discoveryrule.get", "params": { 'output': 'extend' , 'hostids': templateid, 'filter': { 'name': adisc_name }},
+                                           "auth": zbx_token, "id": 1 } )
+            call_nah = urllib2.Request(api_uri, Rdisc_APIcreate, headers)
+            response_nah = urllib2.urlopen(call_nah)
+            result_nah = json.loads(response_nah.read())
+            Qlldruleid = result_nah['result'][0]['itemid']
+            if verbose == "true":
+                print ("Using old discoveryrule ("+adisc_name+") id: "+Qlldruleid)
+
+# channel discovery
+
+        adisc_name  = "Channels Discovery for "+qmgr
+        adisc_APIcreate = json.dumps({ "jsonrpc": "2.0", "method": "discoveryrule.create", "params": { "name": adisc_name ,
+                                      "key_": "system.run["+script_location+"channel-discovery "+qmgr+"]",
+                                      "hostid": templateid, "type": "0", "delay": 3600, "interfaceid" : "100", "filter": { "evaltype": 1, "conditions": [
+                                      { "macro": {{'"{#CHANNEL}"'}}, "value": "" },
+                                      { "macro": {{'"{#CTYPE}"'}}, "value": "" } ]}}, "auth": zbx_token, "id": 1 } )
+        call_nah = urllib2.Request(api_uri, adisc_APIcreate, headers)
+        response_nah = urllib2.urlopen(call_nah)
+        result_nah = json.loads(response_nah.read())
+        if hasattr(result_nah, 'result'):
+            Clldruleid = result_nah['result']['itemids'][0]
+            if verbose == "true":
+                print ("Using newly created discoveryrule ("+adisc_name+") id: "+Clldruleid)
+        else:
+            Rdisc_APIcreate = json.dumps({ "jsonrpc": "2.0", "method": "discoveryrule.get", "params": { 'output': 'extend' , 'hostids': templateid, 'filter': { 'name': adisc_name }},
+                                           "auth": zbx_token, "id": 1 } )
+            call_nah = urllib2.Request(api_uri, Rdisc_APIcreate, headers)
+            response_nah = urllib2.urlopen(call_nah)
+            result_nah = json.loads(response_nah.read())
+            Clldruleid = result_nah['result'][0]['itemid']
+            if verbose == "true":
+                print ("Using old discoveryrule ("+adisc_name+") id: "+Clldruleid)
+
+# bail out is there is no queue discovery id
+        if not Qlldruleid:
+          sys.exit("I have no rule ID to continue")
+
+#
+#  ITEMS
+#
+
+# item to check queue current depth
+
+        protoitem_name = "Check Queue {{'{#QUEUE}'}} CURDEPTH on "+qmgr
+        itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "itemprototype.create", "params": { "name": protoitem_name,
+                                        "key_": "system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                        "value_type": 3, "interfaceid": "100", "delay": 600 }, "auth": zbx_token, "id": 1})
+        call_ia = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+        response_ia = urllib2.urlopen(call_ia)
+        result_ia = json.loads(response_ia.read())
+        if hasattr(result_ia, 'result'):
+            cur_itemid = result_ia['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new itemprototype ("+protoitem_name+") id: "+cur_itemid)
+        else:
+            if verbose == "true":
+                print ("itemprototype ("+protoitem_name+") was not created, it already exists")
+
+# item to check queue maximum depth
+
+        protoitem_name = "Check Queue {{'{#QUEUE}'}} MAXDEPTH on "+qmgr
+        itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "itemprototype.create", "params": { "name": protoitem_name,
+                                        "key_": "system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE MAXDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                        "value_type": 3, "interfaceid": "100", "delay": 84600 }, "auth": zbx_token, "id": 1})
+        call_ib = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+        response_ib = urllib2.urlopen(call_ib)
+        result_ib = json.loads(response_ib.read())
+        if hasattr(result_ib, 'result'):
+            max_itemid = result_ib['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new itemprototype ("+protoitem_name+") id: "+max_itemid)
+        else:
+            if verbose == "true":
+                print ("itemprototype ("+protoitem_name+") was not created, it already exists")
+
+# item to check channel available
+
+        protoitem_name = "Check Channel {{'{#CHANNEL}'}} availability at "+qmgr
+        itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "itemprototype.create", "params": { "name": protoitem_name,
+                                        "key_": "system.run["+script_location+"display-wrapper "+qmgr+" {{'{#CHANNEL}'}} CHSTATUS STATUS]", "hostid": templateid, "ruleid": Clldruleid, "type": 0,
+                                        "value_type": 4, "interfaceid": "100", "delay": 300 }, "auth": zbx_token, "id": 1})
+        call_ic = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+        response_ic = urllib2.urlopen(call_ic)
+        result_ic = json.loads(response_ic.read())
+        if hasattr(result_ic, 'result'):
+            chn_itemid = result_ic['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new itemprototype ("+protoitem_name+") id: "+chn_itemid)
+        else:
+            if verbose == "true":
+                print ("itemprototype ("+protoitem_name+") was not created, it already exists")
+
+# item to check amount of channel connections
+
+        protoitem_name = "Amount of Channel {{'{#CHANNEL}'}} connections at "+qmgr
+        itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "itemprototype.create", "params": { "name": protoitem_name,
+                                        "key_": "system.run["+script_location+"display-counter "+qmgr+" {{'{#CHANNEL}'}} CHSTATUS ALL]", "hostid": templateid, "ruleid": Clldruleid, "type": 0,
+                                        "value_type": 4, "interfaceid": "100", "delay": 300 }, "auth": zbx_token, "id": 1})
+        call_ic = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+        response_ic = urllib2.urlopen(call_ic)
+        result_ic = json.loads(response_ic.read())
+        if hasattr(result_ic, 'result'):
+            achn_itemid = result_ic['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new itemprototype ("+protoitem_name+") id: "+achn_itemid)
+        else:
+            if verbose == "true":
+                print ("itemprototype ("+protoitem_name+") was not created, it already exists")
+
+#
+#  TRIGGERS
+#
+
+# prototype trigger if queue have reached max depth
+
+        prototrigger_name = "Queue {{'{#QUEUE}'}} have reached MAXDEPTH at {HOSTNAME} :"+qmgr
+        trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "triggerprototype.create", "params": { "description": prototrigger_name,
+                                        "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last()}>{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE MAXDEPTH].last()})",
+                                                        "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+        call_ta = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+        response_ta = urllib2.urlopen(call_ta)
+        result_ta = json.loads(response_ta.read())
+        if hasattr(result_ta, 'result'):
+            tptq_itemid = result_ta['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new triggerprototype ("+prototrigger_name+") id: "+tptq_itemid)
+        else:
+            if verbose == "true":
+                print ("triggerprototype ("+prototrigger_name+") was not created, it already exists")
+
+# prototype trigger if queue have messages sitting greater than 0 for the last 18 samples (18 * 300scs = 90 minutes)
+
+        prototrigger_name = "Queue {{'{#QUEUE}'}} have stuck messages at {HOSTNAME} :"+qmgr
+        trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "triggerprototype.create", "params": { "description": prototrigger_name,
+                                                "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#1)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#2)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#3)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#4)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#5)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#6)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#7)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#8)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#9)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#10)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#11)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#12)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#13)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#14)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#15)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#16)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#17)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#QUEUE}'}} QUEUE CURDEPTH].last(#18)}>0)",
+                                                "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+        call_tb = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+        response_tb = urllib2.urlopen(call_tb)
+        result_tb = json.loads(response_tb.read())
+        if hasattr(result_tb, 'result'):
+            tptq_itemid = result_tb['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new triggerprototype ("+prototrigger_name+") id: "+tptq_itemid)
+        else:
+            if verbose == "true":
+                print ("triggerprototype ("+prototrigger_name+") was not created, it already exists")
+
+# prototype trigger to warn is channel is available
+
+        prototrigger_name = "Channel {{'{#CHANNEL}'}} is not available at {HOSTNAME} :"+qmgr
+        trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "triggerprototype.create", "params": { "description": prototrigger_name,
+                                        "expression": "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" {{'{#CHANNEL}'}} CHSTATUS STATUS].str(RUNNING)}=0",
+                                                        "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+        call_tb = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+        response_tb = urllib2.urlopen(call_tb)
+        result_tb = json.loads(response_tb.read())
+        if hasattr(result_tb, 'result'):
+            tptq_itemid = result_tb['result']['itemids'][0]
+            if verbose == "true":
+                print ("Creating new triggerprototype ("+prototrigger_name+") id: "+tptq_itemid)
+        else:
+            if verbose == "true":
+                print ("triggerprototype ("+prototrigger_name+") was not created, it already exists")
+
+# lets run through the invert_triggers
+
+        for item in invert_triggers:
+
+            if verbose == "true":
+                print("## using invert_triggers with item "+item)
+
+# first item current depth
+
+            item_name = "Check Queue "+item+" CURDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 900 }, "auth": zbx_token, "id": 1})
+            call_ia = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ia = urllib2.urlopen(call_ia)
+            result_ia = json.loads(response_ia.read())
+            if hasattr(result_ia, 'result'):
+                cur_itemid = result_ia['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new inverse item ("+item_name+") id: "+cur_itemid)
+            else:
+                if verbose == "true":
+                        print ("inverse item ("+item_name+") was not created, it already exists")
+
+# second item maximum depth
+
+            item_name = "Check Queue "+item+" MAXDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 84600 }, "auth": zbx_token, "id": 1})
+            call_ib = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ib = urllib2.urlopen(call_ib)
+            result_ib = json.loads(response_ib.read())
+            if hasattr(result_ib, 'result'):
+                max_itemid = result_ib['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new inverse item ("+item_name+") id: "+max_itemid)
+            else:
+                if verbose == "true":
+                        print ("inverse item ("+item_name+") was not created, it already exists")
+
+# trigger for max depth
+
+            trigger_name = "Queue "+item+" have reached MAXDEPTH at {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                            "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last()}>{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH].last()})",
+                                                            "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_ta = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_ta = urllib2.urlopen(call_ta)
+            result_ta = json.loads(response_ta.read())
+            if hasattr(result_ta, 'result'):
+                trg_itemid = result_ta['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new inverse trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("inverse trigger ("+trigger_name+") was not created, it already exists")
+
+
+# trigger should not be zero
+
+            trigger_name = "Queue "+item+" should not be ZERO at {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                                "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#1)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#2)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#3)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#4)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#5)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#6)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#7)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#8)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#9)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#10)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#11)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#12)}<1)",
+                                                "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_tb = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_tb = urllib2.urlopen(call_tb)
+            result_tb = json.loads(response_tb.read())
+            if hasattr(result_tb, 'result'):
+                trg_itemid = result_tb['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new inverse trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("inverse trigger ("+trigger_name+") was not created, it already exists")
+
+# working out the daytime triggers
+
+        for item in daytime_triggers:
+
+            if verbose == "true":
+                print("## using daytime_triggers with item "+item)
+
+
+# first create current depth
+
+            item_name = "Check Queue "+item+" CURDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 900 }, "auth": zbx_token, "id": 1})
+            call_ia = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ia = urllib2.urlopen(call_ia)
+            result_ia = json.loads(response_ia.read())
+            if hasattr(result_ia, 'result'):
+                cur_itemid = result_ia['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime item ("+item_name+") id: "+cur_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime item ("+item_name+") was not created, it already exists")
+
+# second max depth
+
+            item_name = "Check Queue "+item+" MAXDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 84600 }, "auth": zbx_token, "id": 1})
+            call_ib = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ib = urllib2.urlopen(call_ib)
+            result_ib = json.loads(response_ib.read())
+            if hasattr(result_ib, 'result'):
+                max_itemid = result_ib['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime item ("+item_name+") id: "+max_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime item ("+item_name+") was not created, it already exists")
+
+# trigger for max depth
+
+            trigger_name = "Queue "+item+" have reached MAXDEPTH at {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                            "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last()}>{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH].last()})",
+                                                            "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_ta = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_ta = urllib2.urlopen(call_ta)
+            result_ta = json.loads(response_ta.read())
+            if hasattr(result_ta, 'result'):
+                trg_itemid = result_ta['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime trigger ("+trigger_name+") was not created, it already exists")
+
+# trigger for stuck messages greater than zero
+
+            trigger_name = "Daytime Alerting Queue "+item+" have stuck messages {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                                "expression": "(({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#1)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#2)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#3)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#4)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#5)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#6)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#7)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#8)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#9)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#10))>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#11)}>0 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#12)}>0) and "+
+                                                               "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].time()}>080000 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].time()}<220000))",
+                                                "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_tb = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_tb = urllib2.urlopen(call_tb)
+            result_tb = json.loads(response_tb.read())
+            if hasattr(result_tb, 'result'):
+                trg_itemid = result_tb['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime trigger ("+trigger_name+") was not created, it already exists")
+
+# now lets do the real daytime inverse idea
+
+        for item in daytime_triggers_inverse:
+
+            if verbose == "true":
+                print("## using daytime_triggers_inverse with item "+item)
+
+# item for current depth
+
+            item_name = "Check Queue "+item+" CURDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 900 }, "auth": zbx_token, "id": 1})
+            call_ia = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ia = urllib2.urlopen(call_ia)
+            result_ia = json.loads(response_ia.read())
+            if hasattr(result_ia, 'result'):
+                cur_itemid = result_ia['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime inverse item ("+item_name+") id: "+cur_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime inverse item ("+item_name+") was not created, it already exists")
+
+# item for max depth
+
+            item_name = "Check Queue "+item+" MAXDEPTH on "+qmgr
+            itmproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "item.create", "params": { "name": item_name,
+                                            "key_": "system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH]", "hostid": templateid, "ruleid": Qlldruleid, "type": 0,
+                                            "value_type": 3, "interfaceid": "100", "delay": 84600 }, "auth": zbx_token, "id": 1})
+            call_ib = urllib2.Request(api_uri, itmproto_APIcreate, headers)
+            response_ib = urllib2.urlopen(call_ib)
+            result_ib = json.loads(response_ib.read())
+            if hasattr(result_ib, 'result'):
+                max_itemid = result_ia['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime inverse item ("+item_name+") id: "+max_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime inverse item ("+item_name+") was not created, it already exists")
+
+# trigger for max depth
+
+            trigger_name = "Queue "+item+" have reached MAXDEPTH at {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                            "expression": "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last()}>{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE MAXDEPTH].last()})",
+                                                            "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_ta = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_ta = urllib2.urlopen(call_ta)
+            result_ta = json.loads(response_ta.read())
+            if hasattr(result_ta, 'result'):
+                trg_itemid = result_ta['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime inverse trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime inverse trigger ("+trigger_name+") was not created, it already exists")
+
+# trigger for inverse daytime
+
+            trigger_name = "Daytime Alerting Queue "+item+" have stuck messages {HOSTNAME} :"+qmgr
+            trgproto_APIcreate= json.dumps({ "jsonrpc": "2.0", "method": "trigger.create", "params": { "description": trigger_name,
+                                                "expression": "(({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#1)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#2)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#3)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#4)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#5)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#6)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#7)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#8)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#9)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#10)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#11)}<1 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].last(#12)}<1) and "+
+                                                               "({"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].time()}>080000 and "+
+                                                               "{"+n_tmpl_name+":system.run["+script_location+"display-wrapper "+qmgr+" "+item+" QUEUE CURDEPTH].time()}<220000))",
+                                                "hostid": templateid, "priority": trigger_prio, "manual_close": 1 }, "auth": zbx_token, "id": 1})
+
+            call_tb = urllib2.Request(api_uri, trgproto_APIcreate, headers)
+            response_tb = urllib2.urlopen(call_tb)
+            result_tb = json.loads(response_tb.read())
+            if hasattr(result_tb, 'result'):
+                trg_itemid = result_tb['result']['itemids'][0]
+                if verbose == "true":
+                        print ("Creating new daytime inverse trigger ("+trigger_name+") id: "+trg_itemid)
+            else:
+                if verbose == "true":
+                        print ("daytime inverse trigger ("+trigger_name+") was not created, it already exists")

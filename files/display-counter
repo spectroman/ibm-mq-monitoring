@@ -1,0 +1,52 @@
+#!/bin/bash
+###############################################################################
+#
+# Lets check the information from the IBM MQ! But this time, counting lists!
+#
+#
+# by spectroman at yahoo.com ## 09-05-2017
+#
+#
+
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 QUEUEMANAGER QUEUENAME QUESTION PROPERTY"
+    exit 1
+fi
+
+LOCAL=$(dirname $0)
+CFG=$LOCAL/mq-config
+
+. $CFG
+
+declare -a QUEUES
+
+QQUERY=`echo "DISPLAY $3($2)" | $SUDOUSER $RUNMQSC_BIN $1`
+
+RES=$?
+if [[  "$RES" -gt 0 ]]; then
+  echo "There was no response from Queue Manager. This Channel / Queue is unavailable."
+  exit 1;
+fi
+
+IFS=$'\n'
+CNT=0
+
+for line in ${QQUERY[@]}; do
+  if [[ $4 =~ ALL ]]; then
+    if [[ $3 =~ CONN ]]; then
+      if [[ $line =~ AMQ8276 ]]; then
+        retcount=$(expr $retcount + 1)
+      fi
+    fi
+    if [[ $3 =~ CHSTATUS ]]; then
+      if [[ $line =~ AMQ8417 ]]; then
+        retcount=$(expr $retcount + 1)
+      fi
+    fi
+  fi
+done
+
+echo $retcount
+
+exit 0;

@@ -1,0 +1,33 @@
+---
+- name: linux | Create {{mq_scripts}} folder
+  file: path={{mq_scripts}} state=directory mode=0755 owner=root group=zabbix
+  become: yes
+
+- name: linux | Install MQ Framework CFG
+  template: src=mq-config.j2 dest={{mq_scripts}}mq-config owner=zabbix group=zabbix mode=644
+  become: yes
+
+- name: linux | Install MQ Framework Python Script
+  template: src=zabbix-api.j2 dest={{mq_scripts}}zabbix-api owner=zabbix group=zabbix mode=755
+  become: yes
+
+- name: linux | Copy channel-discovery
+  copy: src=files/channel-discovery dest={{mq_scripts}}channel-discovery mode=0755 owner=zabbix group=zabbix
+  become: yes
+
+- name: linux | Copy display-wrapper
+  copy: src=files/display-wrapper dest={{mq_scripts}}display-wrapper mode=0755 owner=zabbix group=zabbix
+  become: yes
+
+- name: linux | Copy display-counter
+  copy: src=files/display-counter dest={{mq_scripts}}display-counter mode=0755 owner=zabbix group=zabbix
+  become: yes
+
+- name: linux | Copy qm-discovery
+  copy: src=files/qm-discovery dest={{mq_scripts}}qm-discovery mode=0755 owner=zabbix group=zabbix
+  become: yes
+
+- name: linux | Copy queue-discovery
+  copy: src=files/queue-discovery dest={{mq_scripts}}queue-discovery mode=0755 owner=zabbix group=zabbix
+  become: yes
+  notify: restart zabbix agent

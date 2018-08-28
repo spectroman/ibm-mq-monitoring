@@ -1,0 +1,73 @@
+#!/bin/bash
+####################################################################
+# ________  ___      _ _
+#|  _  |  \/  |     | (_)
+#| | | | .  . |   __| |_ ___  ___ _____   _____ _ __ _   _
+#| | | | |\/| |  / _` | / __|/ __/ _ \ \ / / _ \ '__| | | |
+#\ \/' / |  | | | (_| | \__ \ (_| (_) \ V /  __/ |  | |_| |
+# \_/\_\_|  |_/  \__,_|_|___/\___\___/ \_/ \___|_|   \__, |
+#                                                     __/ |
+#                                                    |___/
+#
+#   Lets discover the queues containing in this server and then call the
+#   zabbix-api script to create the other LLD for discovering the queues
+#   which needs the name of the queue manager to accomplish so
+#
+# by spectroman at yahoo.com ## 09-05-2017
+#
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 [d|QUEUEMANAGERNAME]"
+    exit 1
+fi
+
+LOCAL=$(dirname $0)
+CFG=$LOCAL/mq-config
+
+. $CFG
+
+declare -a QMGRS
+QMGRS=`$QMGMR_BIN -n`
+RES=$?
+if [[  "$RES" -gt 0 ]]; then
+  echo "There was a problem executing the Queue Manager discovery, please check it manually"
+  exit 1;
+fi
+
+IFS=$'\n'
+CNT=0
+declare -a QMS
+
+for line in ${QMGRS[@]}; do
+    if [[ $line =~ QMNAME\((.*)\)[[:space:]]*STATUS\((.*)\) ]]; then
+      CNT=$(($CNT+1))
+      if [[ "${BASH_REMATCH[1]}" == "$1" ]]; then
+        echo ${BASH_REMATCH[2]}
+        exit 0;
+      fi
+      QMS[$CNT]=${BASH_REMATCH[1]}
+    fi
+done
+
+NUMIT=${#QMS[@]}
+PRN=0
+
+for arritem in ${QMS[@]}; do
+  if [[ "$NUMIT" == 1 ]] && [[ "$PRN" == 0 ]]; then
+    echo "{ \"data\": [ { \"{#QMNAME}\" : \"$arritem\" } ]}"
+    $ZBXAPI `hostname -s` $arritem
+  else
+    if [[ "$PRN" == 0 ]]; then
+      echo "{ \"data\": ["
+    fi
+    if [[ $(($PRN + 1)) == "$NUMIT" ]]; then
+      echo "{ \"{#QMNAME}\" : \" $arritem\"}"
+      echo "]}"
+      $ZBXAPI `hostname -s` $arritem
+    elif [[ "$PRN" -lt "$NUMIT" ]]; then
+      echo "{ \"{#QMNAME}\" : \" $arritem\"},"
+      $ZBXAPI `hostname -s` $arritem
+    fi
+  fi
+  PRN=$PRN+1
+done

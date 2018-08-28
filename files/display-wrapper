@@ -1,0 +1,49 @@
+#!/bin/bash
+###############################################################################
+#
+# Lets check the information from the IBM MQ!
+#
+#
+# by spectroman at yahoo.com ## 09-05-2017
+#
+#
+
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 QUEUEMANAGER QUEUENAME QUESTION PROPERTY"
+    exit 1
+fi
+
+LOCAL=$(dirname $0)
+CFG=$LOCAL/mq-config
+
+. $CFG
+
+declare -a QUEUES
+
+QQUERY=`echo "DISPLAY $3($2)" | $SUDOUSER $RUNMQSC_BIN $1`
+
+RES=$?
+if [[  "$RES" -gt 0 ]]; then
+  echo "There was no response from Queue Manager. This Channel / Queue is unavailable."
+  exit 1;
+fi
+
+IFS=$'\n'
+CNT=0
+
+for line in ${QQUERY[@]}; do
+  if [[ $4 =~ ALL ]]; then
+    echo $line
+  fi
+  if [[ $line =~ $4\((.*)\).*\(.*\) ]]; then
+    echo ${BASH_REMATCH[1]}
+    exit 0;
+  fi
+  if [[ $line =~ .*\(.*\).*$4\((.*)\) ]]; then
+    echo ${BASH_REMATCH[1]}
+    exit 0;
+  fi
+done
+
+exit 0;
